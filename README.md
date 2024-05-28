@@ -22,7 +22,7 @@ This repository contains scripts used in the study to analyze spatial gene expre
    git clone https://github.com/astrid12345/Visium_ST.git
    cd Visium_ST
    
-Follow the instructions in each script comments to reproduce the results. Use corresponding input files stored under **data_files/**
+2. Follow the instructions in each script comments to reproduce the results. Locate corresponding input files stored in **data_files/**
 
 ## Requirements
 - Jupyter Notebook
