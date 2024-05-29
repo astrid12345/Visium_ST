@@ -1,6 +1,6 @@
 # Visium_ST
 
-Scripts to reproduce results from the study "Decoding spatial gene activity changes in multiple sclerosis lesion progression".
+Scripts to reproduce figures from the study "Decoding spatial gene activity changes in multiple sclerosis lesion progression".
 
 ## About
 
@@ -26,3 +26,7 @@ This repository contains scripts used in the study to analyze spatial gene expre
 
 ## Requirements
 - Jupyter Notebook
+
+## Raw data
+
+Raw data to re-analyse the dataset published in "Decoding spatial gene activity changes in multiple sclerosis lesion progression" can be found on GSE208747.
