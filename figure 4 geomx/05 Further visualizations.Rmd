@@ -1,0 +1,236 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+########################################################################
+# Author    : J. Kotah
+# Date      : September 2023
+# Dataset   : GeoMx dataset from MS active and act/inact WM lesions, 6 lesions across 5 brains
+# Purpose   : sample code for visualizations combine ImageJ ROI analysis to R for spatial plotting
+# Output    : various graphs
+# Input     : GeoMx objects analyzed using GeomxTools and Seurat, ROI with collection areas as prepared in script 2
+########################################################################
+
+library(NanoStringNCTools)
+library(GeomxTools)
+library(GeoMxWorkflows)
+library(dplyr)
+library(ggplot2)
+```
+#load dataframe with polygon coordinates as mentioned in script 2
+```{r}
+roi_plot_df = readRDS("02_ROI_plotting_dataframe.rds")
+```
+
+#IMPORTANT NOTE (also mentioned in script 2)
+ROI polygons as currently made are associated with an ID and a sample. The corresponding order of each segment and the ImageJ ROIs were manually compiled based on the ImageJ ROI selection and the order of collection from samples on the machine, as seen in the "full" image on the GEO submission. This is available as column "ROI_name" in the metadata Excel file. As such, all spatial plotting is done by first matching the 'id' column in ROI_plotting_dataframe to the "ROI_name" column in the corresponding GeoMx object. Below is an example:
+
+#Plotting genes of interest in space, as explained in Script2 (here for sample BrainA1, lesion 1, aka A1-1)
+##preparation
+```{r}
+nano_obj <- readRDS("../GeoMx Data for Github/01_BrainA1_lesions_combined_target_pilotData_0.1.rds")
+gene_plot = "GPNMB"
+
+#take metadata info from each sample to combine back with count data later
+meta.df = data.frame(barcode = rownames(pData(nano_obj)), ROI_name = pData(nano_obj)$ROI_name,
+                     Lesion = pData(nano_obj)$Lesion, sample = pData(nano_obj)$sample
+                     )
+
+plot_df <- exprs(nano_obj)[gene_plot,] %>% #exprs() is the function to select (normalized) counts
+  data.frame() %>% `colnames<-`(c("Count")) %>% mutate(barcode = rownames(.)) %>%
+  left_join(., meta.df, by="barcode")
+
+```
+
+##plotting part
+```{r}
+#for BrainA1, with two lesions, filtering step for the plotting is to indicate Lesion (A1-1 or A1-2),
+#for the other samples, use "sample == BrainXX" instead
+
+img1 <- as.raster(png::readPNG("../GeoMx Data for Github/Images/BrainA1L1_plotting.png")) #change to relevant img folder
+img_Y = dim(img1)[1]
+img_X = dim(img1)[2]
+
+#without overlay A1L1
+print(
+    plot_df %>% 
+  right_join(., roi_plot_df, by = c("ROI_name" = "id")) %>%
+    filter(Lesion == "A1-1") %>% 
+    #filter(sample == "BrainA2") %>%, #used for plotting other samples with only 1 lesion, note above comment about changing samples
+    ggplot(., aes(x=long, y=lat, group = ROI_name, fill = Count)) +
+    geom_polygon() + 
+  theme_void() +
+  scale_fill_gradient(low = "green", high = "red") +
+  ggtitle(paste0("Normalized counts for ", gene_plot," in Lesion A1-1")) + 
+  theme(plot.title = element_text(hjust = 0.5, face = 'bold'),
+        legend.position = "bottom",
+        aspect.ratio = img_Y/img_X
+        ) + labs(fill = element_blank())
+)
+
+#with overlay A1L1
+print(
+    plot_df %>% 
+  right_join(., roi_plot_df, by = c("ROI_name" = "id")) %>%
+    filter(Lesion == "A1-1") %>% 
+    #filter(sample == "BrainA2") %>% #used for plotting other samples with only 1 lesion, note above comment about changing samples
+    ggplot(., aes(x=long, y=lat, group = ROI_name, fill = Count)) +
+  annotation_raster(img1, ymin = -img_Y ,ymax= 0,xmin = 0,xmax = img_X) +
+  geom_polygon() + 
+  theme_void() +
+  scale_fill_gradient(low = "green", high = "red") +
+  ggtitle(paste0("Normalized counts for ", gene_plot," in Lesion A1-1")) + 
+  theme(plot.title = element_text(hjust = 0.5, face = 'bold'),
+        legend.position = "bottom",
+        aspect.ratio = img_Y/img_X
+        ) + labs(fill = element_blank())
+)
+
+
+```
+#plotting segment-level (meta) information (as prepared in script 4)
+##load prepared dataframe from script 4
+```{r}
+meta.df = readRDS("../GeoMx Data for Github/04_GeoMx_metadata_with_clusterNames_moduleScores.rds")
+meta.df
+```
+
+```{r}
+roi_plot_df
+```
+
+##example of plotting clusters on microscope image
+```{r}
+#for BrainA1, with two lesions, filtering step for the plotting is to indicate Lesion (A1-1 or A1-2),
+#for the other samples, use "sample == BrainXX" instead
+
+tissue = "BrainA1"
+plot.df = meta.df %>% filter(sample == tissue)
+
+#special spatial plotting code for A1 due to the two lesions
+plot.df %>% right_join(., roi_plot_df, by = c("ROI_name" = "id")) %>% 
+  filter(Sample %in% c("A1L1", "A1L2"), #in this dataset, sample A1 is split into lesion 1 and 2, A1L1/A1L2
+         !is.na(clusters)) %>%
+  ggplot(., aes(x=long, y=lat, group = ROI_name, fill = clusters)) +
+  geom_polygon() + theme_void()+ ggtitle(paste0("Sample ", tissue, " combined 10% CV<1, Log2Exprs>2")) + facet_wrap(~ factor(Sample, levels = c("A1L2", "A1L1")))
+
+
+#with overlay A1L1
+img_path = paste0("../Img Exports/BrainA1L1_plotting.png")
+
+img <- as.raster(png::readPNG(img_path))
+img_Y = dim(img)[1]
+img_X = dim(img)[2]
+
+plot.df %>% right_join(., roi_plot_df, by = c("ROI_name" = "id")) %>% 
+  filter(Lesion == "A1-1",
+         #sample == "BrainA2", %>% #used for plotting other samples with only 1 lesion, note above comment about changing samples
+         !is.na(clusters)) %>%
+  ggplot(., aes(x=long, y=lat, group = ROI_name, fill = clusters)) +
+  annotation_raster(img, ymin = -img_Y ,ymax= 0,xmin = 0,xmax = img_X) +
+  geom_polygon() + theme_void()+ ggtitle(paste0("Sample ", tissue))
+
+```
+##cluster annotation
+```{r}
+#based on visual inspection of each lesion sample, we annotate clusters as follows. Please also see the genes enriched for each cluster as we used these to help us decide.
+
+meta.df$cluster_name = case_when(meta.df$sample == "BrainA1" & meta.df$clusters == "1" ~ "Core/Rim1",
+                                 meta.df$sample == "BrainA1" & meta.df$clusters == "2" ~ "<3 segments",
+                                 meta.df$sample == "BrainA1" & meta.df$clusters == "3" ~ "Rim2",
+                                 meta.df$sample == "BrainA1" & meta.df$clusters == "4" ~ "Perilesional",
+                                 
+                                 meta.df$sample == "BrainA2" & meta.df$clusters == "1" ~ "Rim1",
+                                 meta.df$sample == "BrainA2" & meta.df$clusters == "2" ~ "Rim2",
+                                 meta.df$sample == "BrainA2" & meta.df$clusters == "3" ~ "Rim3",
+                                 meta.df$sample == "BrainA2" & meta.df$clusters == "4" ~ "Perilesional",
+                                 meta.df$sample == "BrainA2" & meta.df$clusters == "5" ~ "Core/<3 segments",
+                                 meta.df$sample == "BrainA2" & meta.df$clusters == "6" ~ "<3 segments",
+                                 
+                                 meta.df$sample == "BrainM1" & meta.df$clusters == "1" ~ "Rim2",
+                                 meta.df$sample == "BrainM1" & meta.df$clusters == "2" ~ "Rim1/Perilesional",
+                                 meta.df$sample == "BrainM1" & meta.df$clusters == "3" ~ "Core",
+                                 meta.df$sample == "BrainM1" & meta.df$clusters == "4" ~ "<3 segments",
+                                 
+                                 meta.df$sample == "BrainM2" & meta.df$clusters == "1" ~ "Core/Rim1",
+                                 meta.df$sample == "BrainM2" & meta.df$clusters == "2" ~ "Rim2",
+                                 meta.df$sample == "BrainM2" & meta.df$clusters == "3" ~ "Non-inflammatory Rim",
+                                 meta.df$sample == "BrainM2" & meta.df$clusters == "4" ~ "Perilesional",
+                                 
+                                 meta.df$sample == "BrainM3" & meta.df$clusters == "1" ~ "Rim2",
+                                 meta.df$sample == "BrainM3" & meta.df$clusters == "2" ~ "Perilesional",
+                                 meta.df$sample == "BrainM3" & meta.df$clusters == "3" ~ "Rim1",
+                                 meta.df$sample == "BrainM3" & meta.df$clusters == "4" ~ "Core"
+                                 )
+```
+
+##example of plotting cluster names on microscope image
+```{r}
+#for BrainA1, with two lesions, filtering step for the plotting is to indicate Lesion (A1-1 or A1-2),
+#for the other samples, use "sample == BrainXX" instead
+
+tissue = "BrainA1"
+plot.df = meta.df %>% filter(sample == tissue)
+
+#special spatial plotting code for A1 due to the two lesions
+plot.df %>% right_join(., roi_plot_df, by = c("ROI_name" = "id")) %>% 
+  filter(Sample %in% c("A1L1", "A1L2"), #in this dataset, sample A1 is split into lesion 1 and 2, A1L1/A1L2
+         !is.na(clusters)) %>%
+  ggplot(., aes(x=long, y=lat, group = ROI_name, fill = cluster_name)) +
+  geom_polygon() + theme_void()+ ggtitle(paste0("Sample ", tissue, " combined 10% CV<1, Log2Exprs>2")) + facet_wrap(~ factor(Sample, levels = c("A1L2", "A1L1")))
+
+
+#with overlay A1L1
+img_path = paste0("../Img Exports/BrainA1L1_plotting.png")
+
+#img <- as.raster(png::readPNG(img_path))
+#img_Y = dim(img)[1]
+#img_X = dim(img)[2]
+
+plot.df %>% right_join(., roi_plot_df, by = c("ROI_name" = "id")) %>% 
+  filter(Lesion == "A1-1",
+         #sample == "BrainA2", %>% #used for plotting other samples with only 1 lesion, note above comment about changing samples
+         !is.na(clusters)) %>%
+  ggplot(., aes(x=long, y=lat, group = ROI_name, fill = cluster_name)) +
+  annotation_raster(img, ymin = -img_Y ,ymax= 0,xmin = 0,xmax = img_X) +
+  geom_polygon() + theme_void()+ ggtitle(paste0("Sample ", tissue))
+
+```
+##example of plotting module scores on microscope image
+```{r}
+#for BrainA1, with two lesions, filtering step for the plotting is to indicate Lesion (A1-1 or A1-2),
+#for the other samples, use "sample == BrainXX" instead
+
+tissue = "BrainA1"
+plot.df = meta.df %>% filter(sample == tissue)
+
+#special spatial plotting code for A1 due to the two lesions
+plot.df %>% right_join(., roi_plot_df, by = c("ROI_name" = "id")) %>% 
+  filter(Sample %in% c("A1L1", "A1L2"), #in this dataset, sample A1 is split into lesion 1 and 2, A1L1/A1L2
+         !is.na(clusters)) %>%
+  ggplot(., aes(x=long, y=lat, group = ROI_name, fill = MIMS_iron1)) +
+  geom_polygon() + theme_void()+ ggtitle(paste0("Sample ", tissue, " combined 10% CV<1, Log2Exprs>2")) + facet_wrap(~ factor(Sample, levels = c("A1L2", "A1L1")))
+
+
+#with overlay A1L1
+img_path = paste0("../Img Exports/BrainA1L1_plotting.png")
+
+#img <- as.raster(png::readPNG(img_path))
+#img_Y = dim(img)[1]
+#img_X = dim(img)[2]
+
+plot.df %>% right_join(., roi_plot_df, by = c("ROI_name" = "id")) %>% 
+  filter(Lesion == "A1-1",
+         #sample == "BrainA2", %>% #used for plotting other samples with only 1 lesion, note above comment about changing samples
+         !is.na(clusters)) %>%
+  ggplot(., aes(x=long, y=lat, group = ROI_name, fill = MIMS_iron1)) +
+  annotation_raster(img, ymin = -img_Y ,ymax= 0,xmin = 0,xmax = img_X) +
+  geom_polygon() + theme_void()+ ggtitle(paste0("Sample ", tissue))
+
+```
+```{r}
+sessionInfo()
+```
+

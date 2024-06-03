@@ -1,0 +1,191 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+########################################################################
+# Author    : J. Kotah
+# Date      : September 2023
+# Dataset   : GeoMx dataset from MS active and act/inact WM lesions, 6 lesions across 5 brains
+# Purpose   : combine ImageJ ROI analysis to R for spatial plotting
+# Output    : dataframe with image polygon coordinates
+# Input     : ImageJ ROIs, microscope image from GeoMx
+########################################################################
+
+library(NanoStringNCTools)
+library(GeomxTools)
+library(GeoMxWorkflows)
+library(dplyr)
+library(ggplot2)
+#devtools::install_github("https://github.com/davidcsterratt/RImageJROI")
+library(RImageJROI)
+library(sp)
+
+```
+#before loading:
+Microscope outputs from GeoMx (showing relevant lesion) were opened on ImageJ. These images correspond to the 'plotting' images, and are cropped from the "full" images available on the GEO package. Each ROI was selected using the Wand (tracing) tool, after which the selection was added to the ROI manager. All relevant ROIs per image were exported from ImageJ, and are provided as "*_ROISet.zip" files per sample
+
+#load ImageJ ROIs
+```{r}
+A1L1 <- read.ijzip("../GeoMx Data for Github/BrainA1L1_RoiSet.zip")
+plot(A1L1)
+```
+#flipping segments vertically (to reflect what is on the microscope image)
+
+```{r}
+A1L1_flip = A1L1
+for (each in names(A1L1_flip)){
+  print(each)
+  A1L1_flip[[each]]$coords[,2] = -1*A1L1_flip[[each]]$coords[,2]
+  A1L1_flip[[each]]$yrange = -1 * A1L1_flip[[each]]$yrange
+}
+
+plot(A1L1_flip)
+
+```
+
+
+#make into sp object, which can be combined w/ ggplot2 to be overlaid on microscope images
+```{r}
+poly.list = list()
+
+for (each in names(A1L1_flip)){
+  print(each)
+  poly.list[each] = Polygons(list(Polygon(A1L1_flip[[each]]$coords)), each)
+}
+
+SpDF <- SpatialPolygonsDataFrame(SpatialPolygons(poly.list), 
+            data.frame( z=1:length(names(A1L1_flip)), row.names=names(A1L1_flip)))
+
+spplot(SpDF, zcol="z", col.regions = gray(seq(0,1,.01)))
+```
+#example for lesion A1L1
+```{r}
+img1 <- as.raster(png::readPNG("../GeoMx Data for Github/Images/BrainA1L1_plotting.png"))
+
+SpDF_fort = fortify(SpDF)
+SpDF_fort %>% ggplot(., aes(x=long, y=lat, group = id, fill = id)) +
+  annotation_raster(img1, ymin = -2166 ,ymax= 0,
+                    xmin = 0,xmax = 2982) + #max and min values are based on the microscope image dimensions
+  geom_point(size = 2) + geom_polygon() + ylim(c(-2166,0)) + xlim(c(0, 2982)) + theme_void() +
+  scale_fill_manual(values =  colorRampPalette(c("green", "red"))(14))
+
+#using this, we can plot certain properties of segments (gene expression, module scores, etc) spatially
+```
+
+#prepare a dataframe for all images to not have to redo this everytime
+##write function to create sp dataframe from ImageJ ROIs
+```{r}
+IJ_to_SP = function(sample_name = "A1L1", dir = "../GeoMx Data for Github/Brain"){
+  roi <- read.ijzip(paste0(dir, sample_name,"_RoiSet.zip"))
+  
+  #flip img vertically
+  for (each in names(roi)){
+    roi[[each]]$coords[,2] = -1*roi[[each]]$coords[,2]
+    roi[[each]]$yrange = -1 * roi[[each]]$yrange
+  }
+  
+  poly.list = list()
+  for (each in names(roi)){
+      poly.list[each] = Polygons(list(Polygon(roi[[each]]$coords)), each)
+  }
+
+  SpDF <- SpatialPolygonsDataFrame(SpatialPolygons(poly.list), 
+            data.frame( z=1:length(names(roi)), row.names=names(roi)))
+  
+  return(SpDF)
+}
+
+A2 = IJ_to_SP("A2")
+spplot(A2, zcol="z", col.regions = gray(seq(0,1,.01)))
+```
+
+#loop IJ to R function across all samples
+```{r}
+sample_list = c("A1L1", "A1L2", "A2", "A3", "M1", "M2", "M3")
+roi_plot_df = data.frame(matrix(nrow = 0, ncol = 0))
+
+for (sample in sample_list){
+  print(paste0("Loading sample ", sample))
+  roi = IJ_to_SP(sample)
+  SpDF_fort = fortify(roi)
+  roi_plot_df = SpDF_fort %>% mutate(Sample = sample) %>% rbind(., roi_plot_df)
+}
+
+roi_plot_df
+saveRDS(roi_plot_df, "02_ROI_plotting_dataframe.rds")
+```
+
+#IMPORTANT NOTE
+ROI polygons as currently made are associated with an ID and a sample. The corresponding order of each segment and the ImageJ ROIs were manually compiled based on the ImageJ ROI selection and the order of collection from samples on the machine, as seen in the "full" image on the GEO submission. This is available as column "ROI_name" in the metadata Excel file. As such, all spatial plotting is done by first matching the 'id' column in ROI_plotting_dataframe to the "ROI_name" column in the corresponding GeoMx object. Below is an example:
+
+#Example plotting gene expression in space for sample BrainA1, lesion 1 (aka A1-1)
+##preparation
+```{r}
+nano_obj <- readRDS("../GeoMx Data for Github/03_BrainA1_lesions_combined_target_pilotData_0.1.rds")
+gene_plot = "GPNMB"
+
+#take metadata info from each sample to combine back with count data later
+meta.df = data.frame(barcode = rownames(pData(nano_obj)), ROI_name = pData(nano_obj)$ROI_name,
+                     Lesion = pData(nano_obj)$Lesion, sample = pData(nano_obj)$sample
+                     )
+
+plot_df <- exprs(nano_obj)[gene_plot,] %>% #exprs() is the function to select (normalized) counts
+  data.frame() %>% `colnames<-`(c("Count")) %>% mutate(barcode = rownames(.)) %>%
+  left_join(., meta.df, by="barcode")
+
+```
+
+##plotting part
+```{r}
+#for BrainA1, with two lesions, filtering step for the plotting is to indicate Lesion (A1-1 or A1-2),
+#for the other samples, use "sample == BrainXX" instead
+
+img1 <- as.raster(png::readPNG("../GeoMx Data for Github/Images/BrainA1L1_plotting.png")) #change to relevant img folder
+img_Y = dim(img1)[1]
+img_X = dim(img1)[2]
+
+#without overlay A1L1
+print(
+    plot_df %>% 
+  right_join(., roi_plot_df, by = c("ROI_name" = "id")) %>%
+    filter(Lesion == "A1-1") %>% 
+    #filter(sample == "BrainA2") %>%, #used for plotting other samples with only 1 lesion, note above comment about changing samples
+    ggplot(., aes(x=long, y=lat, group = ROI_name, fill = Count)) +
+    geom_polygon() + 
+  theme_void() +
+  scale_fill_gradient(low = "green", high = "red") +
+  ggtitle(paste0("Normalized counts for ", gene_plot," in Lesion A1-1")) + 
+  theme(plot.title = element_text(hjust = 0.5, face = 'bold'),
+        legend.position = "bottom",
+        aspect.ratio = img_Y/img_X
+        ) + labs(fill = element_blank())
+)
+
+#with overlay A1L1
+print(
+    plot_df %>% 
+  right_join(., roi_plot_df, by = c("ROI_name" = "id")) %>%
+    filter(Lesion == "A1-1") %>% 
+    #filter(sample == "BrainA2") %>% #used for plotting other samples with only 1 lesion, note above comment about changing samples
+    ggplot(., aes(x=long, y=lat, group = ROI_name, fill = Count)) +
+  annotation_raster(img1, ymin = -img_Y ,ymax= 0,xmin = 0,xmax = img_X) +
+  geom_polygon() + 
+  theme_void() +
+  scale_fill_gradient(low = "green", high = "red") +
+  ggtitle(paste0("Normalized counts for ", gene_plot," in Lesion A1-1")) + 
+  theme(plot.title = element_text(hjust = 0.5, face = 'bold'),
+        legend.position = "bottom",
+        aspect.ratio = img_Y/img_X
+        ) + labs(fill = element_blank())
+)
+
+
+```
+
+
+```{r}
+sessionInfo()
+```
+

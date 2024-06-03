@@ -1,0 +1,135 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+########################################################################
+# Author    : J. Kotah
+# Date      : September 2023
+# Dataset   : GeoMx dataset from MS active and act/inact WM lesions, 6 lesions across 5 brains
+# Purpose   : generate cluster information from GeoMx data per sample
+# Output    : object with clustering information that is also converted to be compatible with Seurat
+# Input     : GeoMx tools analyzed RDS object
+# Note      : This was run on each sample
+########################################################################
+
+library(NanoStringNCTools)
+library(GeomxTools)
+library(GeoMxWorkflows)
+library(dplyr)
+library(knitr)
+library(scales)
+library(pheatmap)
+library(Seurat) #v4.3 used here; v5 leads to problems w/ conversion of GeoMx obj to Seurat obj
+
+# following vignette from GeoMx tools package
+# https://www.bioconductor.org/packages/release/workflows/vignettes/GeoMxWorkflows/inst/doc/GeomxTools_RNA-NGS_Analysis.html
+# https://www.bioconductor.org/packages/release/bioc/vignettes/GeomxTools/inst/doc/GeomxSet_coercions.html 
+
+```
+
+#load in object
+```{r}
+objects_0.1 = list.files("../GeoMx Data for Github/",pattern = "pilotData_0.1.rds")
+roi_plot_df = readRDS("../GeoMx Data for Github/02_ROI_plotting_dataframe.rds") #from Script 2, includes polygon info for all lesions
+```
+
+#pick sample, add cluster info, example code for sample A1
+```{r}
+analyzing = 1 #repeated for other samples
+sample_list = c("A1combined", "A2", "M1", "M2", "M3")
+
+sample = sample_list[analyzing]
+target_pilotData_10 = readRDS(paste0("../GeoMx Data for Github/",objects_0.1[analyzing]))
+print(sample)
+target_pilotData_10
+```
+```{r}
+# create a log2 transform of the data for analysis
+assayDataElement(object = target_pilotData_10, elt = "log_q") <- assayDataApply(target_pilotData_10, 2, FUN = log, base = 2, elt = "q_norm")
+
+# create coefficient of variation (CV) function as done in Nanostring vignette
+calc_CV <- function(x) {sd(x) / mean(x)}
+CV_dat_10 <- assayDataApply(target_pilotData_10,
+                         elt = "log_q", MARGIN = 1, calc_CV)
+
+#visualize in this sample total expression vs CV, highlighting certain CV percentiles
+total_exprs_10 = assayDataElement(target_pilotData_10, elt = "log_q") %>% rowSums(na.rm = T)/ncol(target_pilotData_10)
+plot(CV_dat_10,total_exprs_10, 
+     main = paste0(sample, ": showing 80/90/95th quantile of CV") , 
+     sub= "10% Feature Filter") + abline(v= c(quantile(CV_dat_10, 0.8), quantile(CV_dat_10, 0.9), quantile(CV_dat_10, 0.95)),
+                                        col = c("blue", "red", "green"))
+
+```
+#select genes to use for clustering
+```{r}
+#because in trial and error we found that lowly expressed but highly variable genes could drive clustering that did not make sense, we filter here for the top 1000 genes with minimum total exprs of 2 and max CV of 1
+
+data.frame(cbind(CV_dat_10, total_exprs_10)) %>% filter(total_exprs_10 > 2,
+                                                        CV_dat_10 <1) %>% arrange(-CV_dat_10) %>%
+      slice(1:1000) %>%
+      rownames(.) -> GOI
+
+out_10 = pheatmap(assayDataElement(target_pilotData_10[GOI, ], elt = "log_q"),
+         scale = "row", 
+         show_rownames = FALSE, show_colnames = FALSE,
+         border_color = NA,
+         clustering_method = "average",
+         clustering_distance_rows = "correlation",
+         clustering_distance_cols = "correlation",
+         breaks = seq(-3, 3, 0.05),
+         main = paste0(sample, " Features > 10%percent, CV <95th percentile, Log2Exprs>2"),
+         color = colorRampPalette(c("purple3", "black", "yellow2"))(120),
+         annotation_col = 
+             pData(target_pilotData_10)[, c("designation_lv1", "designation_lv2")])
+```
+#make clusters from dendrogram, show in space
+```{r}
+#BrainA1 has two lesions; clustered together, plotted separately. For these lesions, filtering step for  plotting is to indicate Lesion# (A1-1 or A1-2),
+#for the other samples, use "sample == BrainXX" instead
+
+clusterdf = cutree(out_10$tree_col, k = 4) %>% data.frame() %>% `colnames<-`("Cluster")
+#Please note that for Sample A2, we chose 6 clusters as it seemed to fit the data best. All others had 4 clusters fitted
+
+pData(target_pilotData_10)$clusters = factor(clusterdf$Cluster)
+
+#Brain A1, Lesion1
+pData(target_pilotData_10) %>% select(ROI_name, Lesion, clusters) %>% 
+  right_join(., roi_plot_df, by = c("ROI_name" = "id")) %>% 
+  filter(Lesion == "A1-1",
+         #Sample == sample, #used for plotting other samples with only 1 lesion, note above comment about changing samples
+         !is.na(clusters)) %>%
+  ggplot(., aes(x=long, y=lat, group = ROI_name, fill = clusters)) +
+  geom_polygon() + theme_void()+ ggtitle(paste0("Heatmap clusters sample ", sample,", Features> 10%, CV<95th percentile, Log2Exprs>2"))
+
+#Brain A1, Lesion2
+pData(target_pilotData_10) %>% select(ROI_name, Lesion, clusters) %>% 
+  right_join(., roi_plot_df, by = c("ROI_name" = "id")) %>% 
+  filter(Lesion == "A1-2",
+         #Sample == sample, #used for plotting other samples with only 1 lesion, note above comment about changing samples
+         !is.na(clusters)) %>%
+  ggplot(., aes(x=long, y=lat, group = ROI_name, fill = clusters)) +
+  geom_polygon() + theme_void()+ ggtitle(paste0("Heatmap clusters sample ", sample,", Features> 10%, CV<95th percentile, Log2Exprs>2"))
+
+```
+#convert to Seurat obj and save
+```{r}
+nano_seu <- as.Seurat(target_pilotData_10, normData = "log_q", ident = "clusters")
+saveRDS(nano_seu, paste0("03_seurat_obj_", sample, ".rds"))
+#Repeated for all samples. As mentioned above, please note that for Sample A2, we chose 6 clusters as it seemed to fit the data best
+
+#outputs are as follows
+#"03_seurat_obj_A1combined.rds"
+#"03_seurat_obj_A2.rds"
+#"03_seurat_obj_M1.rds"
+#"03_seurat_obj_M2.rds"
+#"03_seurat_obj_M3.rds"
+```
+
+```{r}
+sessionInfo() 
+#something inaccurate in this sessionInfo is the Seurat version used. As mentioned above, Seurat v4.3 used in this analysis, as v5 (unfortunately currently installed on the computer where scripts are being cleaned up) leads to problems w/ conversion of GeoMx obj to Seurat obj
+
+```
+

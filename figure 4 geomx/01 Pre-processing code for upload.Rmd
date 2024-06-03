@@ -1,0 +1,230 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+########################################################################
+# Author    : J. Kotah
+# Date      : September 2023
+# Dataset   : GeoMx dataset from MS active and act/inact WM lesions, 6 lesions across 5 brains
+# Purpose   : load and pre-process raw GeoMx data in preparation for downstream analyses
+# Output    : GeoMx tools analyzed RDS object
+# Input     : *.DCC GeoMx experiment files 
+########################################################################
+
+library(NanoStringNCTools)
+library(GeomxTools)
+library(GeoMxWorkflows)
+library(dplyr)
+library(knitr)
+library(scales)
+
+# following vignette from GeoMx tools package
+# https://www.bioconductor.org/packages/release/workflows/vignettes/GeoMxWorkflows/inst/doc/GeomxTools_RNA-NGS_Analysis.html
+```
+
+#load data of all samples into one object
+```{r}
+data.dir = "./"
+DCCFiles = dir(file.path(data.dir, "/DCC/"), pattern = ".dcc$", full.names = TRUE, recursive = TRUE)
+
+PKCFiles <- dir(file.path(data.dir, "/PKC/"), pattern = ".pkc$", full.names = TRUE, recursive = TRUE)
+
+SampleAnnotationFile <- paste0(data.dir, "/Annotations/20230926_Expt_Metadata_v1.xlsx")
+
+pilotData <- readNanoStringGeoMxSet(dccFiles = DCCFiles,
+                                    pkcFiles = PKCFiles,
+                                    phenoDataFile = SampleAnnotationFile,
+                                    phenoDataSheet = "Sheet1",
+                                    phenoDataDccColName = "Sample_ID",
+                                    protocolDataColNames = c("aoi", "roi"),
+                                    experimentDataColNames = c("panel"))
+
+pkcs <- annotation(pilotData)
+modules <- gsub(".pkc", "", pkcs)
+data.frame(PKCs = pkcs, modules = modules)
+
+saveRDS(pilotData, "01_Total_GeoMx_Object_final.rds")
+```
+
+#filter out each sample, which was analyzed separately
+```{r}
+pilotData = readRDS("01_Total_GeoMx_Object_final.rds")
+
+pilotData <- pilotData[, pilotData$segment == "IBA1" & pilotData$sample == "BrainM2"] 
+#options for here are (BrainA2, Brain M1, BrainM2, BrainM3)
+#adjust the code as follows for sample A1 which had lesions
+#pilotData <- pilotData[, pilotData$segment == "IBA1" & pilotData$Lesion %in% c("A1-1", "A1-2")] 
+
+#total collection also has some non-IBA1 segments, which were collected as a separate pilot in this run but not relevant for this analysis, hence they are filtered out
+```
+
+#QC steps
+```{r}
+pilotData <- shiftCountsOne(pilotData, useDALogic = TRUE) #make 0s = 1
+
+QC_params <- list(minSegmentReads = 1000, # Minimum number of reads (1000)
+                  percentTrimmed = 80,    # Minimum % of reads trimmed (80%)
+                  percentStitched = 80,   # Minimum % of reads stitched (80%)
+                  percentAligned = 75,    # Minimum % of reads aligned (75%)
+                  percentSaturation = 50, # Minimum sequencing saturation (50%)
+                  minNegativeCount = 1,   # Minimum negative control counts (1)
+                  maxNTCCount = 1000,     # Maximum counts observed in NTC well (1000)
+                  minNuclei = 20,         # Minimum # of nuclei estimated (20), lowered from default as we collected from smaller areas
+                  minArea = 300)         # Minimum segment area (300), lowered from default as we collected from smaller areas
+
+pilotData <- setSegmentQCFlags(pilotData, 
+                               qcCutoffs = QC_params)
+```
+
+# Collate QC Results
+```{r}
+QCResults <- protocolData(pilotData)[["QCFlags"]]
+flag_columns <- colnames(QCResults)
+QC_Summary <- data.frame(Pass = colSums(!QCResults[, flag_columns]),
+                         Warning = colSums(QCResults[, flag_columns]))
+QCResults$QCStatus <- apply(QCResults, 1L, function(x) {
+  ifelse(sum(x) == 0L, "PASS", "WARNING")
+})
+
+QC_Summary["TOTAL FLAGS", ] <- c(sum(QCResults[, "QCStatus"] == "PASS"),
+                                 sum(QCResults[, "QCStatus"] == "WARNING"))
+
+# calculate the negative geometric means for each module
+negativeGeoMeans <- 
+  esBy(negativeControlSubset(pilotData), 
+       GROUP = "Module", 
+       FUN = function(x) { 
+         assayDataApply(x, MARGIN = 2, FUN = ngeoMean, elt = "exprs") 
+       }) 
+protocolData(pilotData)[["NegGeoMean"]] <- negativeGeoMeans
+
+# explicitly copy the Negative geoMeans from sData to pData
+negCols <- paste0("NegGeoMean_", modules)
+pData(pilotData)[, negCols] <- sData(pilotData)[["NegGeoMean"]]
+
+# detatch neg_geomean columns ahead of aggregateCounts call
+pData(pilotData) <- pData(pilotData)[, !colnames(pData(pilotData)) %in% negCols]
+
+# show all NTC values, Freq = # of Segments with a given NTC count:
+table(NTC_Count = sData(pilotData)$NTC)#,
+
+#subset out QC_failing segments
+pilotData <- pilotData[, QCResults$QCStatus == "PASS"]
+# Removed segments which did not pass QC
+dim(pilotData)
+
+```
+
+```{r}
+# Generally keep the qcCutoffs parameters unchanged. Set removeLocalOutliers to 
+# FALSE if you do not want to remove local outliers
+pilotData <- setBioProbeQCFlags(pilotData, 
+                                qcCutoffs = list(minProbeRatio = 0.1,
+                                                 percentFailGrubbs = 20), 
+                                removeLocalOutliers = TRUE)
+ProbeQCPassed <- subset(pilotData, 
+                        fData(pilotData)[["QCFlags"]][,c("LowProbeRatio")] == FALSE &
+                        fData(pilotData)[["QCFlags"]][,c("GlobalGrubbsOutlier")] == FALSE)
+pilotData <- ProbeQCPassed 
+
+```
+
+#collapse gene count data and perform QC
+```{r}
+target_pilotData <- aggregateCounts(pilotData)
+
+#default values for limit of quantification (LOQ)
+cutoff <- 2
+minLOQ <- 2 
+
+# Calculate LOQ per module tested
+LOQ <- data.frame(row.names = colnames(target_pilotData))
+for(module in modules) {
+    vars <- paste0(c("NegGeoMean_", "NegGeoSD_"),
+                   module)
+    if(all(vars[1:2] %in% colnames(pData(target_pilotData)))) {
+        LOQ[, module] <-
+            pmax(minLOQ,
+                 pData(target_pilotData)[, vars[1]] * 
+                     pData(target_pilotData)[, vars[2]] ^ cutoff)
+    }
+}
+
+pData(target_pilotData)$LOQ <- LOQ
+
+LOQ_Mat <- c()
+for(module in modules) {
+    ind <- fData(target_pilotData)$Module == module
+    Mat_i <- t(esApply(target_pilotData[ind, ], MARGIN = 1,
+                       FUN = function(x) {
+                           x > LOQ[, module]
+                       }))
+    LOQ_Mat <- rbind(LOQ_Mat, Mat_i)
+}
+
+# ensure ordering since this is stored outside of the geomxSet
+LOQ_Mat <- LOQ_Mat[fData(target_pilotData)$TargetName, ]
+
+# Save detection rate information to pheno data
+pData(target_pilotData)$GenesDetected <- colSums(LOQ_Mat, na.rm = TRUE)
+pData(target_pilotData)$GeneDetectionRate <- pData(target_pilotData)$GenesDetected / nrow(target_pilotData)
+target_pilotData = target_pilotData[, pData(target_pilotData)$GeneDetectionRate >= .01]
+```
+
+# Calculate detection rate of detected genes
+```{r}
+LOQ_Mat <- LOQ_Mat[, colnames(target_pilotData)]
+fData(target_pilotData)$DetectedSegments <- rowSums(LOQ_Mat, na.rm = TRUE)
+fData(target_pilotData)$DetectionRate <-
+    fData(target_pilotData)$DetectedSegments / nrow(pData(target_pilotData))
+
+# check certain genes of interest detection table
+goi <- c("CX3CR1", "AIF1", "APOC1", "SPP1", "FTH1","TYROBP",
+         "C3",
+         "CLU", "SLC1A2", "ITM2A", "APOLD1",  "NPY", "SST", 
+         "PLP1", "MAL", "MOG", "CNP", "CRYAB",
+         "PDGFRA", "CNTN1", "TNR"
+         )
+
+goi_df <- data.frame(
+    Gene = goi,
+    Number = fData(target_pilotData)[goi, "DetectedSegments"],
+    DetectionRate = percent(fData(target_pilotData)[goi, "DetectionRate"]))
+
+goi_df
+```
+
+#select a cutoff (here we chose 10%) of segments that express a gene to include it
+```{r}
+negativeProbefData <- subset(fData(target_pilotData), CodeClass == "Negative")
+neg_probes <- unique(negativeProbefData$TargetName)
+
+target_pilotData_10 <- 
+    target_pilotData[fData(target_pilotData)$DetectionRate >= 0.1 |
+                        fData(target_pilotData)$TargetName %in% neg_probes, ]
+
+dim(target_pilotData)
+dim(target_pilotData_10)
+
+```
+#Q3 Normalization
+```{r}
+target_pilotData_10 <- normalize(target_pilotData_10 ,
+                             norm_method = "quant", 
+                             desiredQuantile = .75,
+                             toElt = "q_norm")
+```
+
+#export normed objects 
+```{r}
+saveRDS(target_pilotData_10, "01_M2_target_pilotData_0.1.rds")
+#saved in this format for each sample separately, proceed to next script
+#BrainA1 (with two lesions) saved as "01_BrainA1_lesions_combined_target_pilotData_0.1.rds"
+```
+
+```{r}
+sessionInfo()
+```
+

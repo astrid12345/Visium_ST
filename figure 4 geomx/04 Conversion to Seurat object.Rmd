@@ -1,0 +1,91 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+########################################################################
+# Author    : J. Kotah
+# Date      : September 2023
+# Dataset   : GeoMx dataset from MS active and act/inact WM lesions, 6 lesions across 5 brains
+# Purpose   : convert GeoMx data to Seurat for certain analysis steps
+# Output    : Seurat object with 
+# Input     : converted Seurat RDS object
+########################################################################
+
+library(NanoStringNCTools)
+library(GeomxTools)
+library(GeoMxWorkflows)
+library(dplyr)
+library(knitr)
+library(scales)
+library(readxl)
+library(Seurat) #v4.3 used here; v5 leads to problems w/ conversion of GeoMx obj to Seurat obj
+
+# following vignette from GeoMx tools package
+# https://www.bioconductor.org/packages/release/bioc/vignettes/GeomxTools/inst/doc/GeomxSet_coercions.html 
+```
+
+#load Seurat object per sample
+```{r}
+nano_seu <- readRDS("../GeoMx Data for Github/03_seurat_obj_A1combined.rds")
+
+# options are as follows
+# "03_seurat_obj_A1combined.rds"
+# "03_seurat_obj_A2.rds"
+# "03_seurat_obj_M1.rds"
+# "03_seurat_obj_M2.rds"
+# "03_seurat_obj_M3.rds"
+```
+
+#finding markers per cluster
+```{r}
+Idents(nano_seu) = "clusters"
+markers = FindAllMarkers(nano_seu)
+saveRDS(markers, "04 Cluster markers A1combined.csv") #repeated per sample
+```
+
+#calculating module scores per segment
+##load genesets
+```{r}
+geneset <- read_excel("../GeoMx Data for Github/microglia_lists_for_modulescores_Janssen.xlsx")
+geneset
+```
+
+##calculate module scores
+```{r}
+MIMS_foamy <- geneset %>% select(MIMS_foamy) %>% unlist()
+MIMS_iron <- geneset %>% select(MIMS_iron) %>% unlist()
+DAM <- geneset %>% select(DAM) %>% unlist()
+Hs7_phagocytic <- geneset %>% select(Hs7_phagocytic) %>% unlist()
+
+list_geneset = c("MIMS_foamy", "MIMS_iron", "DAM", "Hs7_phagocytic")
+for (geneset_plot in list_geneset){
+  genelist <- geneset[,geneset_plot][1] %>%  unlist()
+  genelist <- genelist[genelist  %in% rownames(nano_seu)]
+  print(length(genelist))
+  names(genelist) <- NULL
+  genelist <- list(genelist)
+  
+  print(length(genelist))
+  nano_seu <- AddModuleScore(object = nano_seu,
+                           assay = "GeoMx",
+                           ctrl = 10,
+                           features =  genelist,
+                           name = geneset_plot
+  )
+  
+}
+
+meta.df = nano_seu@meta.data %>% select(SampleID, sample, Lesion, ROI_name, clusters,  MIMS_iron1, MIMS_foamy1, DAM1, Hs7_phagocytic1)
+
+#all meta.df files are combined and available as "04_GeoMx_metadata_with_clusterNames_moduleScores.rds"
+combined.meta.df = readRDS("../GeoMx Data for Github/04_GeoMx_metadata_with_clusterNames_moduleScores.rds")
+combined.meta.df
+```
+
+```{r}
+sessionInfo()
+#something inaccurate in this sessionInfo is the Seurat version used. As mentioned above, Seurat v4.3 used in this analysis, as v5 (unfortunately currently installed on the computer where scripts are being cleaned up) leads to problems w/ conversion of GeoMx obj to Seurat obj
+```
+
