@@ -1,6 +1,6 @@
 # Visium_ST
 
-Scripts to reproduce figures from the study "Decoding spatial gene activity changes in multiple sclerosis lesion progression".
+Scripts to generate figures from the study "Decoding spatial gene activity changes in multiple sclerosis lesion progression".
 
 ## About
 
