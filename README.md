@@ -8,12 +8,15 @@ This repository contains scripts used in the study to analyze spatial gene expre
 
 ## Repository Structure
 
-- **data_files/**: Contains input data files used in the analysis.
-- **extended data figures/**: Includes additional figures that support the main results.
-- **figure 1 deconvolution cell types/**: Scripts and data for cell type deconvolution in Figure 1.
+- **data_files/**: Contains additional input data files used in scripts.
+- **extended data figures/**: Scripts to reproduce extended data figures.
+- **figure 1 deconvolution cell types/**: Scripts for cell type deconvolution in Figure 1.
 - **figure 1 seurat clustering/**: Scripts for Seurat clustering analysis in Figure 1.
-- **figure 4 geomx/**: Data and scripts related to GeoMx analysis in Figure 4.
+- **figure 2 bayesspace clustering/**: Scripts for spatial clustering analysis in Figure 2.
+- **figure 3 spacex/**: Scripts for spacex analysis of in Figure 3.
+- **figure 4 geomx/**: Scripts related to GeoMx analysis in Figure 4.
 - **figure 5 WM pseudobulk/**: Scripts for pseudobulk analysis of white matter in Figure 5.
+- **figure 6 pseudotemporal trajectory/**: Scripts for trajectory analysis in Figure 6.
 
 ## Usage
 
@@ -29,4 +32,4 @@ This repository contains scripts used in the study to analyze spatial gene expre
 
 ## Raw data
 
-Raw data to re-analyse the dataset published in "Decoding spatial gene activity changes in multiple sclerosis lesion progression" can be found on GSE208747.
+Raw data can be found on GSE208747.
