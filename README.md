@@ -4,7 +4,7 @@ Scripts to reproduce figures from the study "Decoding spatial gene activity chan
 
 ## About
 
-This repository contains scripts used in the study to analyze spatial gene expression changes in multiple sclerosis lesions. The analysis includes various figures and data related to gene activity and clustering.
+This repository contains scripts used in the study to analyze spatial gene expression changes in multiple sclerosis lesions. The analysis includes plotting functions for gene activity maps and clustering.
 
 ## Repository Structure
 
@@ -25,11 +25,11 @@ This repository contains scripts used in the study to analyze spatial gene expre
    git clone https://github.com/astrid12345/Visium_ST.git
    cd Visium_ST
    
-2. Follow the instructions in each script comments to reproduce the results. Locate corresponding input files stored in **data_files/**
+2. Follow the instructions in each script comments to reproduce the results. Locate corresponding input files stored in **data_files/**. Corresponding rds objects are available from the authors upon request.
 
 ## Requirements
 - Jupyter Notebook
 
 ## Raw data
 
-Raw data can be found on GSE208747.
+Raw data can be found on GSE208747. 
