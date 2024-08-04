@@ -29,7 +29,12 @@ This repository contains scripts used in the study to analyze spatial gene expre
 
 ## Requirements
 - Jupyter Notebook
+- R4.2
 
 ## Raw data
 
 Raw data can be found on GSE208747. 
+
+## Contact
+
+If you have any questions or suggestions, feel free to open an issue.
